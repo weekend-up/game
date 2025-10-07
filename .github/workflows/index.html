@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>海底矿产分布——拖拽配对（优化版）</title>
+<style>
+  :root{
+    --w: 1200px;            /* 画布基准宽 */
+    --tag: 64px;            /* 标签高度（更大，适合手指） */
+    --tag-font: 20px;       /* 标签字体 */
+    --btn: 48px;            /* 按钮高度 */
+    --btn-font: 18px;       /* 按钮文字大小 */
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,'Noto Sans SC',sans-serif;background:#f6f7fb;color:#111;display:flex;justify-content:center;align-items:center;min-height:100vh;overflow:hidden;}
+  header{
+    position:absolute;left:0;top:0;width:100%;z-index:10;display:flex;flex-direction:row;gap:12px;
+    padding:12px 20px;justify-content:space-between;max-width:100%;align-items:center;
+    background:rgba(255,255,255,.85);box-shadow:0 2px 12px rgba(0,0,0,.06);
+  }
+  header h1{font-size:20px;text-align:left;margin:0;padding-right:12px;}
+  header .controls{display:flex;flex-direction:row;gap:12px;width:auto;}
+
+  /* 按钮样式（确保自适应） */
+  button{
+    border:0;background:#111;color:#fff;padding:0 18px;height:var(--btn);border-radius:12px;cursor:pointer;font-size:var(--btn-font);
+    width:auto;text-align:center;max-width:220px;
+  }
+  button.secondary{background:#e9ecf3;color:#111}
+  button:active{transform:translateY(1px)}
+
+  /* 画布区域 */
+  .stage-wrap{display:flex;justify-content:center;padding:0 16px;max-width:1200px;width:100%}
+  .stage{
+    width:min(var(--w), 95vw); height:calc(var(--w) * 995 / 1382); /* Automatically adjusts based on aspect ratio */
+    background:#ddd url('bg.png') center/contain no-repeat;
+    border-radius:16px;box-shadow:0 10px 26px rgba(25,35,58,.15);
+    position:relative;overflow:hidden;
+    touch-action:none; /* Prevent scroll while dragging */
+  }
+
+  .drop{
+    position:absolute;border:3px dashed rgba(0,0,0,.22);border-radius:14px;
+    transition:box-shadow .15s, background .15s, border-color .15s;
+    backdrop-filter:saturate(1.1);
+  }
+  .drop.hidden{border-color:transparent;background:transparent}
+  .drop.ok{border-color:#22c55e;background:rgba(34,197,94,.12)}
+  .drop.hint{animation:blink 1s linear 3}
+  @keyframes blink{50%{box-shadow:0 0 0 4px rgba(59,130,246,.28)}}
+
+  .bank{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;padding:0 14px 20px;width:100%;max-width:1200px}
+  .tag{
+    user-select:none; -webkit-user-drag: element;
+    padding:10px 16px; height:var(--tag); line-height:calc(var(--tag) - 20px);
+    background:#fff;border:2px solid #e8eaf1;border-radius:14px;box-shadow:0 6px 16px rgba(29,43,79,.10);
+    cursor:grab;font-weight:700;font-size:var(--tag-font); min-width:132px; text-align:center;
+    touch-action:none;
+  }
+  .tag.dragging{opacity:.85;transform:scale(1.04);cursor:grabbing}
+  .tag.lock{background:#eafff1;border-color:#b6f3ce;cursor:default}
+
+  .toast{
+    position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
+    background:#111;color:#fff;padding:12px 16px;border-radius:12px;
+    box-shadow:0 10px 30px rgba(0,0,0,.2);opacity:0;pointer-events:none;transition:opacity .2s;font-size:16px
+  }
+  .toast.show{opacity:1}
+
+  .score{
+    position:absolute;right:12px;top:12px;background:#111;color:#fff;
+    font-size:15px;padding:8px 12px;border-radius:999px;opacity:.9
+  }
+
+  /* —— 精修落点 —— */
+  .d-sea-surface{left:5.2%; top:13.5%; width:62%; height:8.5%;}
+  .d-beach-sand{left:78.8%; top:29.2%; width:14.5%; height:8.5%;}
+  .d-oilgas{left:39.8%; top:36.2%; width:23.5%; height:9.5%;}
+  .d-shelf{left:59.2%; top:41.0%; width:20%; height:11%;}
+  .d-slope{left:29.0%; top:57.5%; width:34%; height:16.5%;}
+  .d-mn-nodule{left:9.6%; top:62.5%; width:17.5%; height:14%;}
+  .d-sea-floor{left:6.3%; top:78.0%; width:18.5%; height:11.5%;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>拖拽配对：海底矿产分布示意图（左侧按钮全屏优化版）</h1>
+  <div class="controls">
+    <button id="toggle">隐藏落点</button>
+    <button id="reset" class="secondary">重玩</button>
+    <button id="answer" class="secondary">查看答案</button>
+  </div>
+</header>
+
+<div class="stage-wrap">
+  <div class="stage" id="stage">
+    <div class="score" id="score">得分 0 / 7</div>
+
+    <div class="drop d-sea-surface" data-accept="海面" title="海面"></div>
+    <div class="drop d-beach-sand" data-accept="滨海砂矿" title="滨海砂矿"></div>
+    <div class="drop d-oilgas" data-accept="石油天然气" title="石油天然气"></div>
+    <div class="drop d-shelf" data-accept="大陆架" title="大陆架"></div>
+    <div class="drop d-slope" data-accept="大陆坡" title="大陆坡"></div>
+    <div class="drop d-mn-nodule" data-accept="多金属结核" title="多金属结核"></div>
+    <div class="drop d-sea-floor" data-accept="海底" title="海底"></div>
+  </div>
+</div>
+
+<div class="bank" id="bank">
+  <div class="tag" draggable="true" id="海面">海面</div>
+  <div class="tag" draggable="true" id="滨海砂矿">滨海砂矿</div>
+  <div class="tag" draggable="true" id="石油天然气">石油天然气</div>
+  <div class="tag" draggable="true" id="大陆架">大陆架</div>
+  <div class="tag" draggable="true" id="大陆坡">大陆坡</div>
+  <div class="tag" draggable="true" id="多金属结核">多金属结核</div>
+  <div class="tag" draggable="true" id="海底">海底</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// JavaScript code for drag-and-drop and game logic
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const stage = $('#stage');
+let score = 0;
+const total = $$('.drop').length;
+updateScore();
+
+function updateScore(){ $('#score').textContent = `得分 ${score} / ${total}` }
+function toast(msg, ms=1400){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._hi); t._hi = setTimeout(()=>t.classList.remove('show'), ms);
+}
+
+/* —— 通用吸附函数 —— */
+function snapToDrop(tag, drop){
+  drop.classList.add('ok');
+  tag.classList.add('lock');
+  const r = drop.getBoundingClientRect();
+  const st = stage.getBoundingClientRect();
+  const x = r.left - st.left + r.width/2 - tag.offsetWidth/2;
+  const y = r.top - st.top + r.height/2 - tag.offsetHeight/2;
+  tag.style.position = 'absolute';
+  tag.style.left = x + 'px';
+  tag.style.top  = y + 'px';
+  tag.style.zIndex = 2;
+  stage.appendChild(tag);
+  score++; updateScore();
+  if(score===total){ toast('🎉 全部正确！', 1800); }
+}
+
+/* —— 桌面：原生 Drag & Drop —— */
+$$('.tag').forEach(tag=>{
+  tag.addEventListener('dragstart', e=>{
+    e.dataTransfer.setData('text/plain', tag.id);
+    tag.classList.add('dragging');
+  });
+  tag.addEventListener('dragend', e=> tag.classList.remove('dragging'));
+});
+$$('.drop').forEach(drop=>{
+  drop.addEventListener('dragover', e=>{ e.preventDefault() });
+  drop.addEventListener('drop', e=>{
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/plain');
+    const tag = document.getElementById(id);
+    if(!tag || tag.classList.contains('lock')) return;
+    const need = drop.dataset.accept;
+    if(id === need){
+      snapToDrop(tag, drop);
+      const notes = {
+        '海面':'海水与大气的界面，是海上运输与风浪活动区。',
+        '滨海砂矿':'多形成于海滨或陆架区的波浪/潮流沉积带，常含重矿物。',
+        '石油天然气':'赋存在大陆架沉积盆地，近海平台开采。',
+        '大陆架':'水深一般<200m，资源丰富、便于开发。',
+        '大陆坡':'从大陆架向深海过渡的陡坡地带。',
+        '多金属结核':'主要位于深海盆地（约4–6千米），富Mn、Ni、Co、Cu等。',
+        '海底':'深海盆地底部，细粒沉积覆盖。'
+      };
+      toast(`√ ${need}：${notes[need]||''}`, 1600);
+    }else{
+      drop.classList.add('hint');
+      setTimeout(()=>drop.classList.remove('hint'), 900);
+      toast('× 位置不对，再想想～', 900);
+    }
+  });
+});
+
+let hidden = false;
+$('#toggle').addEventListener('click', ()=>{
+  hidden = !hidden;
+  $$('.drop').forEach(d=> d.classList.toggle('hidden', hidden));
+  $('#toggle').textContent = hidden ? '显示落点' : '隐藏落点';
+});
+
+$('#reset').addEventListener('click', ()=>{
+  score = 0; updateScore();
+  const bank = $('#bank');
+  $$('.drop').forEach(d=> d.classList.remove('ok'));
+  $$('.tag').forEach(t=>{
+    t.classList.remove('lock','dragging');
+    t.removeAttribute('style');
+    bank.appendChild(t);
+  });
+  if(hidden){ $('#toggle').click(); }
+  toast('已重置，开始重拖！', 900);
+});
+
+$('#answer').addEventListener('click', ()=>{
+  $('#reset').click();
+  setTimeout(()=>{
+    $$('.drop').forEach(drop=>{
+      const id = drop.dataset.accept;
+      const tag = document.getElementById(id);
+      snapToDrop(tag, drop);
+    });
+  },10);
+});
+</script>
+</body>
+</html>
